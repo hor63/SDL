@@ -21,7 +21,7 @@
 
 #ifndef SDL_build_config_minimal_h_
 #define SDL_build_config_minimal_h_
-#define SDL_build_config_h_
+// #define SDL_build_config_h_
 
 #include <SDL3/SDL_platform_defines.h>
 

@@ -19,8 +19,8 @@
   3. This notice may not be removed or altered from any source distribution.
 */
 
-#ifndef SDL_build_config_h_
-#define SDL_build_config_h_
+#ifndef SDL_build_config_dummy_h_
+#define SDL_build_config_dummy_h_
 
 #include <SDL3/SDL_platform_defines.h>
 
@@ -58,4 +58,4 @@
 #error Wrong SDL_build_config.h, check your include path?
 #endif
 
-#endif /* SDL_build_config_h_ */
+#endif /* SDL_build_config_dummy_h_ */
