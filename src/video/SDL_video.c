@@ -2464,6 +2464,8 @@ SDL_Window *SDL_CreateWindowWithProperties(SDL_PropertiesID props)
     /* Make sure window pixel size is up to date */
     SDL_CheckWindowPixelSizeChanged(window);
 
+    SDL_ClearError();
+
     return window;
 }
 
@@ -3784,6 +3786,12 @@ int SDL_SetWindowRelativeMouseMode(SDL_Window *window, SDL_bool enabled)
 {
     CHECK_WINDOW_MAGIC(window, -1);
 
+    /* If the app toggles relative mode directly, it probably shouldn't
+     * also be emulating it using repeated mouse warps, so disable
+     * mouse warp emulation by default.
+     */
+    SDL_DisableMouseWarpEmulation();
+
     if (enabled == SDL_GetWindowRelativeMouseMode(window)) {
         return 0;
     }
@@ -4096,6 +4104,9 @@ void SDL_DestroyWindow(SDL_Window *window)
     /* Make sure this window no longer has focus */
     if (SDL_GetKeyboardFocus() == window) {
         SDL_SetKeyboardFocus(NULL);
+    }
+    if ((window->flags & SDL_WINDOW_MOUSE_CAPTURE)) {
+        SDL_UpdateMouseCapture(SDL_TRUE);
     }
     if (SDL_GetMouseFocus() == window) {
         SDL_SetMouseFocus(NULL);

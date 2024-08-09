@@ -27,8 +27,12 @@
 
 #include <stdbool.h>
 #define COBJMACROS
-#include <GameInput.h>
+#include <gameinput.h>
 
+enum
+{
+    SDL_GAMEPAD_BUTTON_GAMEINPUT_SHARE = 11
+};
 
 typedef struct GAMEINPUT_InternalDevice
 {
@@ -53,14 +57,14 @@ typedef struct joystick_hwdata
     GAMEINPUT_InternalDevice *devref;
     SDL_bool report_sensors;
     GameInputRumbleParams rumbleParams;
-    GameInputCallbackToken guide_button_callback_token;
+    GameInputCallbackToken system_button_callback_token;
 } GAMEINPUT_InternalJoystickHwdata;
-
 
 static GAMEINPUT_InternalList g_GameInputList = { NULL };
 static void *g_hGameInputDLL = NULL;
 static IGameInput *g_pGameInput = NULL;
 static GameInputCallbackToken g_GameInputCallbackToken = GAMEINPUT_INVALID_CALLBACK_TOKEN_VALUE;
+static Uint64 g_GameInputTimestampOffset;
 
 
 static SDL_bool GAMEINPUT_InternalIsGamepad(const GameInputDeviceInfo *info)
@@ -85,6 +89,8 @@ static int GAMEINPUT_InternalAddOrFind(IGameInputDevice *pDevice)
     char tmp[4];
     int idx = 0;
 
+    SDL_AssertJoysticksLocked();
+
     info = IGameInputDevice_GetDeviceInfo(pDevice);
     if (info->capabilities & GameInputDeviceCapabilityWireless) {
         bus = SDL_HARDWARE_BUS_BLUETOOTH;
@@ -103,6 +109,7 @@ static int GAMEINPUT_InternalAddOrFind(IGameInputDevice *pDevice)
         elem = g_GameInputList.devices[idx];
         if (elem && elem->device == pDevice) {
             /* we're already added */
+            elem->isDeleteRequested = SDL_FALSE;
             return 0;
         }
     }
@@ -151,6 +158,8 @@ static int GAMEINPUT_InternalRemoveByIndex(int idx)
     GAMEINPUT_InternalDevice *elem;
     int bytes = 0;
 
+    SDL_AssertJoysticksLocked();
+
     if (idx < 0 || idx >= g_GameInputList.count) {
         return SDL_SetError("GAMEINPUT_InternalRemoveByIndex argument idx %d is out of range", idx);
     }
@@ -181,6 +190,7 @@ static int GAMEINPUT_InternalRemoveByIndex(int idx)
 static GAMEINPUT_InternalDevice *GAMEINPUT_InternalFindByIndex(int idx)
 {
     /* We're guaranteed that the index is in range when this is called */
+    SDL_AssertJoysticksLocked();
     return g_GameInputList.devices[idx];
 }
 
@@ -200,6 +210,8 @@ static void CALLBACK GAMEINPUT_InternalJoystickDeviceCallback(
         return;
     }
 
+    SDL_LockJoysticks();
+
     if (currentStatus & GameInputDeviceConnected) {
         GAMEINPUT_InternalAddOrFind(device);
     } else {
@@ -212,6 +224,8 @@ static void CALLBACK GAMEINPUT_InternalJoystickDeviceCallback(
             }
         }
     }
+
+    SDL_UnlockJoysticks();
 }
 
 static void GAMEINPUT_JoystickDetect(void);
@@ -252,6 +266,11 @@ static int GAMEINPUT_JoystickInit(void)
         return SDL_SetError("IGameInput::RegisterDeviceCallback failure with HRESULT of %08X", hR);
     }
 
+    // Calculate the relative offset between SDL timestamps and GameInput timestamps
+    Uint64 now = SDL_GetTicksNS();
+    uint64_t timestampUS = IGameInput_GetCurrentTimestamp(g_pGameInput);
+    g_GameInputTimestampOffset = (SDL_NS_TO_US(now) - timestampUS);
+
     GAMEINPUT_JoystickDetect();
 
     return 0;
@@ -259,6 +278,8 @@ static int GAMEINPUT_JoystickInit(void)
 
 static int GAMEINPUT_JoystickGetCount(void)
 {
+    SDL_AssertJoysticksLocked();
+
     return g_GameInputList.count;
 }
 
@@ -266,6 +287,8 @@ static void GAMEINPUT_JoystickDetect(void)
 {
     int idx;
     GAMEINPUT_InternalDevice *elem = NULL;
+
+    SDL_AssertJoysticksLocked();
 
     for (idx = 0; idx < g_GameInputList.count; ++idx) {
         elem = g_GameInputList.devices[idx];
@@ -289,6 +312,8 @@ static SDL_bool GAMEINPUT_JoystickIsDevicePresent(Uint16 vendor_id, Uint16 produ
 {
     int idx = 0;
     GAMEINPUT_InternalDevice *elem = NULL;
+
+    SDL_AssertJoysticksLocked();
 
     if (vendor_id == USB_VENDOR_MICROSOFT &&
         product_id == USB_PRODUCT_XBOX_ONE_XBOXGIP_CONTROLLER) {
@@ -373,16 +398,34 @@ static void GAMEINPUT_UpdatePowerInfo(SDL_Joystick *joystick, IGameInputDevice *
     SDL_SendJoystickPowerInfo(joystick, state, percent);
 }
 
-#if 0
-static void CALLBACK GAMEINPUT_InternalGuideButtonCallback(GameInputCallbackToken callbackToken, void *context, IGameInputDevice *device, uint64_t timestamp, bool isPressed)
+#ifdef IGameInput_RegisterSystemButtonCallback
+
+static void CALLBACK GAMEINPUT_InternalSystemButtonCallback(
+    _In_ GameInputCallbackToken callbackToken,
+    _In_ void * context,
+    _In_ IGameInputDevice * device,
+    _In_ uint64_t timestampUS,
+    _In_ GameInputSystemButtons currentButtons,
+    _In_ GameInputSystemButtons previousButtons)
 {
     SDL_Joystick *joystick = (SDL_Joystick *)context;
 
-    SDL_LockJoysticks();
-    SDL_SendJoystickButton(0, joystick, SDL_GAMEPAD_BUTTON_GUIDE, isPressed ? SDL_PRESSED : SDL_RELEASED);
-    SDL_UnlockJoysticks();
+    GameInputSystemButtons changedButtons = (previousButtons ^ currentButtons);
+    if (changedButtons) {
+        Uint64 timestamp = SDL_US_TO_NS(timestampUS + g_GameInputTimestampOffset);
+
+        SDL_LockJoysticks();
+        if (changedButtons & GameInputSystemButtonGuide) {
+            SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_GUIDE, (currentButtons & GameInputSystemButtonGuide) ? SDL_PRESSED : SDL_RELEASED);
+        }
+        if (changedButtons & GameInputSystemButtonShare) {
+            SDL_SendJoystickButton(timestamp, joystick, SDL_GAMEPAD_BUTTON_GAMEINPUT_SHARE, (currentButtons & GameInputSystemButtonShare) ? SDL_PRESSED : SDL_RELEASED);
+        }
+        SDL_UnlockJoysticks();
+    }
 }
-#endif
+
+#endif // IGameInput_RegisterSystemButtonCallback
 
 static int GAMEINPUT_JoystickOpen(SDL_Joystick *joystick, int device_index)
 {
@@ -406,16 +449,24 @@ static int GAMEINPUT_JoystickOpen(SDL_Joystick *joystick, int device_index)
         joystick->naxes = 6;
         joystick->nbuttons = 11;
         joystick->nhats = 1;
+
+#ifdef IGameInput_RegisterSystemButtonCallback
+        if (info->supportedSystemButtons != GameInputSystemButtonNone) {
+            if (info->supportedSystemButtons & GameInputSystemButtonShare) {
+                ++joystick->nbuttons;
+            }
+
+#if 1 // The C macro in GameInput.h version 10.0.26100 refers to a focus policy which I guess has been removed from the final API?
+#undef IGameInput_RegisterSystemButtonCallback
+#define IGameInput_RegisterSystemButtonCallback(This, device, buttonFilter, context, callbackFunc, callbackToken) ((This)->lpVtbl->RegisterSystemButtonCallback(This, device, buttonFilter, context, callbackFunc, callbackToken))
+#endif
+            IGameInput_RegisterSystemButtonCallback(g_pGameInput, elem->device, (GameInputSystemButtonGuide | GameInputSystemButtonShare), joystick, GAMEINPUT_InternalSystemButtonCallback, &hwdata->system_button_callback_token);
+        }
+#endif // IGameInput_RegisterSystemButtonCallback
     } else {
         joystick->naxes = info->controllerAxisCount;
         joystick->nbuttons = info->controllerButtonCount;
         joystick->nhats = info->controllerSwitchCount;
-    }
-
-    if (GAMEINPUT_InternalIsGamepad(info)) {
-#if 0 /* The actual signature for this function is GameInputClient::RegisterSystemButtonCallback(struct IGameInputDevice *,enum GameInputSystemButtons,void *,void (*)(unsigned __int64,void *,struct IGameInputDevice *,unsigned __int64,enum GameInputSystemButtons,enum GameInputSystemButtons),unsigned __int64 *) */
-        IGameInput_RegisterGuideButtonCallback(g_pGameInput, elem->device, joystick, GAMEINPUT_InternalGuideButtonCallback, &hwdata->guide_button_callback_token);
-#endif
     }
 
     if (info->supportedRumbleMotors & (GameInputRumbleLowFrequency | GameInputRumbleHighFrequency)) {
@@ -487,7 +538,7 @@ static void GAMEINPUT_JoystickUpdate(SDL_Joystick *joystick)
     IGameInputDevice *device = hwdata->devref->device;
     const GameInputDeviceInfo *info = hwdata->devref->info;
     IGameInputReading *reading = NULL;
-    Uint64 timestamp = SDL_GetTicksNS();
+    Uint64 timestamp;
     GameInputGamepadState state;
     HRESULT hR;
 
@@ -497,7 +548,7 @@ static void GAMEINPUT_JoystickUpdate(SDL_Joystick *joystick)
         return;
     }
 
-    /* FIXME: See if we can get the delta between the reading timestamp and current time and apply the offset to timestamp */
+    timestamp = SDL_US_TO_NS(IGameInputReading_GetTimestamp(reading) + g_GameInputTimestampOffset);
 
     if (GAMEINPUT_InternalIsGamepad(info)) {
         static WORD s_XInputButtons[] = {
@@ -558,7 +609,7 @@ static void GAMEINPUT_JoystickUpdate(SDL_Joystick *joystick)
             uint32_t i;
             uint32_t button_count = IGameInputReading_GetControllerButtonState(reading, info->controllerButtonCount, button_state);
             for (i = 0; i < button_count; ++i) {
-                SDL_SendJoystickButton(timestamp, joystick, i, button_state[i]);
+                SDL_SendJoystickButton(timestamp, joystick, (Uint8)i, button_state[i]);
             }
             SDL_stack_free(button_state);
         }
@@ -568,7 +619,7 @@ static void GAMEINPUT_JoystickUpdate(SDL_Joystick *joystick)
             uint32_t i;
             uint32_t axis_count = IGameInputReading_GetControllerAxisState(reading, info->controllerAxisCount, axis_state);
             for (i = 0; i < axis_count; ++i) {
-                SDL_SendJoystickAxis(timestamp, joystick, i, CONVERT_AXIS(axis_state[i]));
+                SDL_SendJoystickAxis(timestamp, joystick, (Uint8)i, CONVERT_AXIS(axis_state[i]));
             }
             SDL_stack_free(axis_state);
         }
@@ -607,8 +658,8 @@ static void GAMEINPUT_JoystickClose(SDL_Joystick* joystick)
 {
     GAMEINPUT_InternalJoystickHwdata *hwdata = joystick->hwdata;
 
-    if (hwdata->guide_button_callback_token) {
-        IGameInput_UnregisterCallback(g_pGameInput, hwdata->guide_button_callback_token, 5000);
+    if (hwdata->system_button_callback_token) {
+        IGameInput_UnregisterCallback(g_pGameInput, hwdata->system_button_callback_token, 5000);
     }
     SDL_free(hwdata);
 
@@ -660,7 +711,17 @@ static SDL_bool GAMEINPUT_JoystickGetGamepadMapping(int device_index, SDL_Gamepa
     out->back.kind = EMappingKind_Button;
     out->back.target = SDL_GAMEPAD_BUTTON_BACK;
 
-    /* The guide button isn't available, so don't map it */
+#ifdef IGameInput_RegisterSystemButtonCallback
+    if (elem->info->supportedSystemButtons & GameInputSystemButtonGuide) {
+        out->guide.kind = EMappingKind_Button;
+        out->guide.target = SDL_GAMEPAD_BUTTON_GUIDE;
+    }
+
+    if (elem->info->supportedSystemButtons & GameInputSystemButtonShare) {
+        out->misc1.kind = EMappingKind_Button;
+        out->misc1.target = SDL_GAMEPAD_BUTTON_GAMEINPUT_SHARE;
+    }
+#endif
 
     out->start.kind = EMappingKind_Button;
     out->start.target = SDL_GAMEPAD_BUTTON_START;
