@@ -34,6 +34,7 @@
 #define HAVE_MATH_H 1
 #define HAVE_SIGNAL_H 1
 #define HAVE_STDARG_H 1
+#define HAVE_STDBOOL_H 1
 #define HAVE_STDDEF_H 1
 #define HAVE_STDINT_H 1
 #define HAVE_STDIO_H 1
@@ -75,6 +76,7 @@
 #define HAVE_ATOF   1
 #define HAVE_STRCMP 1
 #define HAVE_STRNCMP    1
+#define HAVE_STRPBRK    1
 #define HAVE_STRCASESTR 1
 #define HAVE_VSSCANF 1
 #define HAVE_VSNPRINTF  1

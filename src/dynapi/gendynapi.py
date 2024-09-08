@@ -99,7 +99,7 @@ def main():
             if match:
                 continue
 
-            # Remove one line comment /* ... */
+            # Remove one line comment // ...
             # eg: extern SDL_DECLSPEC SDL_hid_device * SDLCALL SDL_hid_open_path(const char *path, int bExclusive /* = false */);
             line = reg_comment_remove_content.sub('', line)
 
@@ -180,6 +180,7 @@ def main():
             func = re.sub(r" SDL_RELEASE\(.*\)", "", func);
             func = re.sub(r" SDL_RELEASE_SHARED\(.*\)", "", func);
             func = re.sub(r" SDL_RELEASE_GENERIC\(.*\)", "", func);
+            func = func.replace(" SDL_RESTRICT", "");
 
             # Should be a valid function here
             match = reg_parsing_function.match(func)
